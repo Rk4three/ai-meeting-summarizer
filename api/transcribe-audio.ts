@@ -1,4 +1,3 @@
-// Important: Add this config to tell Vercel to use the Deno runtime
 export const config = {
   runtime: 'edge',
 };
