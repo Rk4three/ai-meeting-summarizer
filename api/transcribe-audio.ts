@@ -64,7 +64,6 @@ export default async function handler(req: Request): Promise<Response> {
 
     let segments: Segment[] = [];
     const speakerMap = new Map<number, string>();
-    let speakerCounter = 1;
 
     if (utterances.length > 0) {
         // Speaker detection logic
@@ -93,21 +92,15 @@ export default async function handler(req: Request): Promise<Response> {
         utterances.forEach((utterance) => {
             if (!speakerMap.has(utterance.speaker)) {
                 const name = extractSpeakerName(utterance.transcript);
-                if (name && utterance.confidence === 1 && !Array.from(speakerMap.values()).includes(name)) {
+                if (name && utterance.confidence >= 0.95 && !Array.from(speakerMap.values()).includes(name)) {
                     speakerMap.set(utterance.speaker, name);
                 }
             }
         });
 
-        utterances.forEach((utterance) => {
-            if (!speakerMap.has(utterance.speaker)) {
-                speakerMap.set(utterance.speaker, `Speaker ${speakerCounter++}`);
-            }
-        });
-
         segments = utterances.map((utterance, index) => ({
             id: `segment_${index}`,
-            speaker: speakerMap.get(utterance.speaker) || 'Unknown Speaker',
+            speaker: speakerMap.get(utterance.speaker) || 'Unknown',
             text: utterance.transcript.trim(),
             timestamp: `${formatTimestamp(utterance.start)} - ${formatTimestamp(utterance.end)}`,
             confidence: utterance.confidence || 0.9,
