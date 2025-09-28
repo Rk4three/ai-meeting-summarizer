@@ -2,6 +2,22 @@ export const config = {
   runtime: 'edge',
 };
 
+interface Utterance {
+  speaker: number;
+  transcript: string;
+  start: number;
+  end: number;
+  confidence: number;
+}
+
+interface Segment {
+  id: string;
+  speaker: string;
+  text: string;
+  timestamp: string;
+  confidence: number;
+}
+
 // Vercel's handler takes a Request and returns a Response
 export default async function handler(req: Request) {
   // Handle CORS preflight requests
@@ -44,9 +60,9 @@ export default async function handler(req: Request) {
     }
 
     const deepgramResult = await deepgramResponse.json();
-    const utterances = deepgramResult.results?.utterances || [];
+    const utterances: Utterance[] = deepgramResult.results?.utterances || [];
 
-    let segments = [];
+    let segments: Segment[] = [];
     const speakerMap = new Map<number, string>();
     let speakerCounter = 1;
 
@@ -71,7 +87,7 @@ export default async function handler(req: Request) {
             return null;
         };
 
-        utterances.forEach((utterance: any) => {
+        utterances.forEach((utterance) => {
             if (!speakerMap.has(utterance.speaker)) {
                 const name = extractSpeakerName(utterance.transcript);
                 if (name && !Array.from(speakerMap.values()).includes(name)) {
@@ -80,13 +96,13 @@ export default async function handler(req: Request) {
             }
         });
 
-        utterances.forEach((utterance: any) => {
+        utterances.forEach((utterance) => {
             if (!speakerMap.has(utterance.speaker)) {
                 speakerMap.set(utterance.speaker, `Speaker ${speakerCounter++}`);
             }
         });
 
-        segments = utterances.map((utterance: any, index: number) => ({
+        segments = utterances.map((utterance, index) => ({
             id: `segment_${index}`,
             speaker: speakerMap.get(utterance.speaker) || 'Unknown Speaker',
             text: utterance.transcript.trim(),
@@ -108,7 +124,7 @@ export default async function handler(req: Request) {
     );
   } catch (error) {
     return new Response(
-      JSON.stringify({ error: error.message }),
+      JSON.stringify({ error: (error as Error).message }),
       {
         status: 500,
         headers: {

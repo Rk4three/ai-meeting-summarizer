@@ -15,7 +15,7 @@ export default async function handler(req: Request) {
     }
 
     try {
-        const { text, type = 'summary' } = await req.json();
+        const { text } = await req.json();
 
         if (!text) {
             throw new Error('Text is required');
@@ -78,7 +78,7 @@ Please respond with only the JSON object, no additional text.`;
 
     } catch (error) {
         return new Response(
-            JSON.stringify({ error: error.message }),
+            JSON.stringify({ error: (error as Error).message }),
             {
                 status: 500,
                 headers: {

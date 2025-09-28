@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useRef } from 'react';
 import { Sparkles, Mic, FileText } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { useToast } from '@/hooks/use-toast';
@@ -36,6 +36,7 @@ const Index = () => {
   const [summary, setSummary] = useState<MeetingSummary | null>(null);
   const [isLoadingSummary, setIsLoadingSummary] = useState(false);
   const { toast } = useToast();
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
 
   const processAudio = async (formData: FormData) => {
     setIsProcessing(true);
@@ -81,11 +82,11 @@ const Index = () => {
         description: "Your file has been transcribed and summarized.",
       });
 
-    } catch (error: any) {
+    } catch (error) {
       console.error('Processing error:', error);
       toast({
         title: "An Error Occurred",
-        description: error.message || "Failed to process the audio. Please try again.",
+        description: (error as Error).message || "Failed to process the audio. Please try again.",
         variant: "destructive",
       });
       setIsProcessing(false);
@@ -109,6 +110,7 @@ const Index = () => {
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       const mediaRecorder = new MediaRecorder(stream);
+      mediaRecorderRef.current = mediaRecorder;
       const audioChunks: Blob[] = [];
 
       mediaRecorder.ondataavailable = (event) => {
@@ -124,7 +126,6 @@ const Index = () => {
       };
 
       mediaRecorder.start();
-      (window as any).currentRecorder = mediaRecorder;
       
     } catch (error) {
       toast({
@@ -138,12 +139,10 @@ const Index = () => {
 
   const handleStopRecording = () => {
     setIsRecording(false);
-    if ((window as any).currentRecorder) {
-      (window as any).currentRecorder.stop();
-      (window as any).currentRecorder = null;
+    if (mediaRecorderRef.current) {
+      mediaRecorderRef.current.stop();
     }
   };
-  
 
   if (currentView === 'app') {
     return (
@@ -199,7 +198,7 @@ const Index = () => {
             <div className="animate-fade-in">
               <div className="glass-card rounded-2xl p-6 h-full hover-lift">
                 <SummaryPanel
-                  summary={summary}
+                  summary={summary || undefined}
                   isLoading={isLoadingSummary}
                 />
               </div>
@@ -215,7 +214,6 @@ const Index = () => {
       {/* Hero Section */}
       <section className="relative overflow-hidden min-h-screen flex items-center">
         <div className="absolute inset-0 gradient-subtle opacity-30"></div>
-        {/* REMOVED: The div that used the heroImage */}
         
         <div className="relative container mx-auto px-4">
           <div className="text-center max-w-5xl mx-auto animate-fade-in">
