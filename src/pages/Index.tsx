@@ -1,11 +1,10 @@
 import React, { useState } from 'react';
-import { Sparkles, Mic, FileText, Zap, Github, Linkedin } from 'lucide-react';
+import { Sparkles, Mic, FileText } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { useToast } from '@/hooks/use-toast';
 import FileUpload from '@/components/FileUpload';
 import TranscriptionPanel from '@/components/TranscriptionPanel';
 import SummaryPanel from '@/components/SummaryPanel';
-import heroImage from '@/assets/hero-meeting-professional.jpg';
 
 interface TranscriptionSegment {
   id: string;
@@ -157,7 +156,7 @@ const Index = () => {
                   <Sparkles className="h-8 w-8 text-primary" />
                   <div className="absolute inset-0 h-8 w-8 rounded-full bg-primary/20 blur-md"></div>
                 </div>
-                <h1 className="text-2xl font.bold text-gradient">AI Meeting Assistant</h1>
+                <h1 className="text-2xl font-bold text-gradient">AI Meeting Assistant</h1>
               </div>
               <Button
                 variant="glass"
@@ -175,7 +174,7 @@ const Index = () => {
             {/* File Upload & Controls */}
             <div className="space-y-6 animate-fade-in">
               <div className="glass-card rounded-2xl p-6 hover-lift">
-                <h2 className="text-xl font.bold mb-4 text-gradient">Upload & Record</h2>
+                <h2 className="text-xl font-bold mb-4 text-gradient">Upload & Record</h2>
                 <FileUpload 
                   onFileSelect={handleFileSelect} 
                   isProcessing={isProcessing}
@@ -186,7 +185,7 @@ const Index = () => {
             {/* Transcription Panel */}
             <div className="animate-fade-in">
               <div className="glass-card rounded-2xl p-6 h-full hover-lift">
-                <h2 className="text-xl font.bold mb-4 text-gradient">Live Transcription</h2>
+                <h2 className="text-xl font-bold mb-4 text-gradient">Live Transcription</h2>
                 <TranscriptionPanel
                   isRecording={isRecording}
                   onStartRecording={handleStartRecording}
@@ -216,10 +215,7 @@ const Index = () => {
       {/* Hero Section */}
       <section className="relative overflow-hidden min-h-screen flex items-center">
         <div className="absolute inset-0 gradient-subtle opacity-30"></div>
-        <div 
-          className="absolute inset-0 bg-cover bg-center opacity-20"
-          style={{ backgroundImage: `url(${heroImage})` }}
-        ></div>
+        {/* REMOVED: The div that used the heroImage */}
         
         <div className="relative container mx-auto px-4">
           <div className="text-center max-w-5xl mx-auto animate-fade-in">
@@ -230,7 +226,7 @@ const Index = () => {
               </div>
             </div>
             
-            <h1 className="text-5xl md:text-7xl lg:text-8xl font.bold mb-8 tracking-tight">
+            <h1 className="text-5xl md:text-7xl lg:text-8xl font-bold mb-8 tracking-tight">
               <span className="text-gradient">AI-Powered</span>
               <br />
               <span className="text-foreground">Meeting Intelligence</span>
@@ -246,7 +242,7 @@ const Index = () => {
                 variant="hero" 
                 size="lg"
                 onClick={() => setCurrentView('app')}
-                className="text-xl px-16 py-6 rounded-2xl font.bold tracking-wide"
+                className="text-xl px-16 py-6 rounded-2xl font-bold tracking-wide"
               >
                 <Sparkles className="h-6 w-6 mr-3" />
                 Get Started
@@ -261,7 +257,7 @@ const Index = () => {
         <div className="absolute inset-0 gradient-subtle opacity-10"></div>
         <div className="container mx-auto px-4 relative">
           <div className="text-center mb-20 animate-slide-up">
-            <h2 className="text-5xl md:text-6xl font.bold mb-6">
+            <h2 className="text-5xl md:text-6xl font-bold mb-6">
               Everything you need for 
               <span className="text-gradient"> smart meetings</span>
             </h2>
@@ -276,7 +272,7 @@ const Index = () => {
                 <Mic className="h-16 w-16 text-primary mx-auto group-hover:scale-110 transition-transform duration-300" />
                 <div className="absolute inset-0 h-16 w-16 mx-auto rounded-full bg-primary/20 blur-xl opacity-0 group-hover:opacity-100 transition-opacity duration-300"></div>
               </div>
-              <h3 className="text-2xl font.bold mb-4 text-gradient">Real-time Transcription</h3>
+              <h3 className="text-2xl font-bold mb-4 text-gradient">Real-time Transcription</h3>
               <p className="text-muted-foreground text-lg leading-relaxed">
                 Live transcription with speaker identification and timestamp accuracy
               </p>
@@ -287,7 +283,7 @@ const Index = () => {
                 <Sparkles className="h-16 w-16 text-primary mx-auto group-hover:scale-110 transition-transform duration-300" />
                 <div className="absolute inset-0 h-16 w-16 mx-auto rounded-full bg-primary/20 blur-xl opacity-0 group-hover:opacity-100 transition-opacity duration-300"></div>
               </div>
-              <h3 className="text-2xl font.bold mb-4 text-gradient">AI-Powered Analysis</h3>
+              <h3 className="text-2xl font-bold mb-4 text-gradient">AI-Powered Analysis</h3>
               <p className="text-muted-foreground text-lg leading-relaxed">
                 Automatically extract key decisions, action items, and meeting insights
               </p>
@@ -298,7 +294,7 @@ const Index = () => {
                 <FileText className="h-16 w-16 text-primary mx-auto group-hover:scale-110 transition-transform duration-300" />
                 <div className="absolute inset-0 h-16 w-16 mx-auto rounded-full bg-primary/20 blur-xl opacity-0 group-hover:opacity-100 transition-opacity duration-300"></div>
               </div>
-              <h3 className="text-2xl font.bold mb-4 text-gradient">Smart Summaries</h3>
+              <h3 className="text-2xl font-bold mb-4 text-gradient">Smart Summaries</h3>
               <p className="text-muted-foreground text-lg leading-relaxed">
                 Get organized summaries with action items, decisions, and next steps
               </p>
@@ -317,7 +313,7 @@ const Index = () => {
                 <Sparkles className="h-8 w-8 text-primary" />
                 <div className="absolute inset-0 h-8 w-8 rounded-full bg-primary/20 blur-md"></div>
               </div>
-              <span className="text-2xl font.bold text-gradient">AI Meeting Assistant</span>
+              <span className="text-2xl font-bold text-gradient">AI Meeting Assistant</span>
             </div>
             
             <div className="pt-8 border-t border-border/20 text-muted-foreground">
