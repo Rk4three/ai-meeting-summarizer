@@ -1,12 +1,8 @@
-import OpenAI from 'openai';
+import Groq from "groq-sdk";
 
 export const config = {
     runtime: 'edge',
 };
-
-const openai = new OpenAI({
-    apiKey: process.env.OPENAI_API_KEY,
-});
 
 export default async function handler(req: Request) {
     if (req.method === 'OPTIONS') {
@@ -25,7 +21,12 @@ export default async function handler(req: Request) {
             throw new Error('Text is required');
         }
 
-        const prompt = `Analyze this meeting transcript and provide a comprehensive summary in JSON format with the following structure:
+        const groq = new Groq({
+            apiKey: process.env.GROQ_API_KEY,
+        });
+
+        const prompt = `
+Analyze this meeting transcript and provide a comprehensive summary in JSON format with the following structure:
 
 IMPORTANT: Look carefully for decisions, agreements, conclusions, or resolutions made during the conversation. Even informal agreements or choices should be considered decisions.
 
@@ -53,37 +54,30 @@ Guidelines:
 
 Meeting transcript:
 ${text}
+        `;
 
-Please respond with only the JSON object, no additional text.`;
-
-        const response = await openai.chat.completions.create({
-            model: "gpt-3.5-turbo",
-            messages: [{ "role": "user", "content": prompt }],
-            temperature: 0.1,
+        const completion = await groq.chat.completions.create({
+            messages: [
+                {
+                    role: "user",
+                    content: prompt,
+                },
+            ],
+            model: "llama3-8b-8192",
+            temperature: 0.2,
             max_tokens: 2048,
+            top_p: 1,
+            stream: false,
+            response_format: { type: "json_object" },
         });
 
-        const generatedText = response.choices[0]?.message?.content;
+        const generatedText = completion.choices[0]?.message?.content;
 
         if (!generatedText) {
             throw new Error('No text generated in response');
         }
 
-        const cleanedText = generatedText.replace(/```json\n?|\n?```/g, '').trim();
-
-        let result;
-        try {
-            result = JSON.parse(cleanedText);
-        } catch (parseError) {
-            console.error('JSON Parse Error:', parseError);
-            console.error('Generated Text:', generatedText);
-            const jsonMatch = cleanedText.match(/\{[\s\S]*\}/);
-            if (jsonMatch) {
-                result = JSON.parse(jsonMatch[0]);
-            } else {
-                throw parseError;
-            }
-        }
+        const result = JSON.parse(generatedText);
 
         return new Response(JSON.stringify(result), {
             headers: {
@@ -92,9 +86,10 @@ Please respond with only the JSON object, no additional text.`;
             },
         });
 
+
     } catch (error) {
         console.error('Analysis error:', error);
-
+        
         const fallbackResult = {
             overview: "Unable to generate AI summary due to API issues. Transcription was successful.",
             keyDecisions: [],
@@ -102,7 +97,7 @@ Please respond with only the JSON object, no additional text.`;
             keyTopics: ["Audio transcription completed"],
             nextSteps: ["Review transcription manually"]
         };
-
+        
         return new Response(JSON.stringify(fallbackResult), {
             headers: {
                 'Content-Type': 'application/json',
