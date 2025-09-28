@@ -19,7 +19,7 @@ interface Segment {
 }
 
 // Vercel's handler takes a Request and returns a Response
-export default async function handler(req: Request) {
+export default async function handler(req: Request): Promise<Response> {
   // Handle CORS preflight requests
   if (req.method === 'OPTIONS') {
     return new Response(null, {
