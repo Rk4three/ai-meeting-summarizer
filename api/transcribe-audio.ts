@@ -93,7 +93,7 @@ export default async function handler(req: Request): Promise<Response> {
         utterances.forEach((utterance) => {
             if (!speakerMap.has(utterance.speaker)) {
                 const name = extractSpeakerName(utterance.transcript);
-                if (name && utterance.confidence >= 0.95 && !Array.from(speakerMap.values()).includes(name)) {
+                if (name && utterance.confidence === 1 && !Array.from(speakerMap.values()).includes(name)) {
                     speakerMap.set(utterance.speaker, name);
                 }
             }
