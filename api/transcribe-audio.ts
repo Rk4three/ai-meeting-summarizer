@@ -70,16 +70,19 @@ export default async function handler(req: Request): Promise<Response> {
         // Speaker detection logic
         const extractSpeakerName = (text: string): string | null => {
             const lowerText = text.toLowerCase();
+            const commonWords = new Set(['there', 'good', 'nice', 'thank', 'thanks', 'yes', 'okay', 'well', 'the', 'a', 'is', 'in', 'it', 'of', 'for', 'on', 'with', 'at', 'by', 'from', 'as']);
             const namePatterns = [
               /(?:my name is|i'm|i am|this is|call me)\s+([a-z]{2,15})/i,
               /(?:hi|hello),?\s+([a-z]{2,15})/i,
-              /^([a-z]{2,15}),?\s+(?:here|speaking)/i
+              /^([a-z]{2,15}),?\s+(?:here|speaking)/i,
+              /^(?:it's|it is)\s+([a-z]{2,15})/i,
+              /([a-z]{2,15})\s+is my name/i
             ];
             for (const pattern of namePatterns) {
               const match = text.match(pattern);
               if (match && match[1]) {
                 const name = match[1].charAt(0).toUpperCase() + match[1].slice(1).toLowerCase();
-                if (!['there', 'good', 'nice', 'thank', 'thanks', 'yes', 'okay', 'well'].includes(name.toLowerCase())) {
+                if (!commonWords.has(name.toLowerCase())) {
                   return name;
                 }
               }
@@ -90,7 +93,7 @@ export default async function handler(req: Request): Promise<Response> {
         utterances.forEach((utterance) => {
             if (!speakerMap.has(utterance.speaker)) {
                 const name = extractSpeakerName(utterance.transcript);
-                if (name && !Array.from(speakerMap.values()).includes(name)) {
+                if (name && utterance.confidence >= 0.95 && !Array.from(speakerMap.values()).includes(name)) {
                     speakerMap.set(utterance.speaker, name);
                 }
             }
