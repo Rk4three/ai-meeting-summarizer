@@ -2,9 +2,7 @@ export const config = {
     runtime: 'edge',
 };
 
-// Vercel's handler takes a Request and returns a Response
 export default async function handler(req: Request) {
-    // Handle CORS preflight requests
     if (req.method === 'OPTIONS') {
         return new Response(null, {
             headers: {
@@ -21,7 +19,7 @@ export default async function handler(req: Request) {
             throw new Error('Text is required');
         }
 
-        const GEMINI_API_KEY = Deno.env.get('GEMINI_API_KEY');
+        const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
         if (!GEMINI_API_KEY) {
             throw new Error('GEMINI_API_KEY is not configured');
         }
@@ -48,7 +46,7 @@ ${text}
 Please respond with only the JSON object, no additional text.`;
 
         const response = await fetch(
-            `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-latest:generateContent?key=${GEMINI_API_KEY}`,
+            `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${GEMINI_API_KEY}`,
             {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },

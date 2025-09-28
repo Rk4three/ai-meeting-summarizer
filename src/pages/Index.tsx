@@ -1,10 +1,10 @@
-import React, { useState, useRef } from 'react';
+import { useState, useRef } from 'react';
+import { Button } from "@/components/ui/button";
+import { useToast } from "@/hooks/use-toast";
+import FileUpload from "@/components/FileUpload";
+import TranscriptionPanel from "@/components/TranscriptionPanel";
+import SummaryPanel from "@/components/SummaryPanel";
 import { Sparkles, Mic, FileText } from 'lucide-react';
-import { Button } from '@/components/ui/button';
-import { useToast } from '@/hooks/use-toast';
-import FileUpload from '@/components/FileUpload';
-import TranscriptionPanel from '@/components/TranscriptionPanel';
-import SummaryPanel from '@/components/SummaryPanel';
 
 interface TranscriptionSegment {
   id: string;
@@ -143,6 +143,7 @@ const Index = () => {
       mediaRecorderRef.current.stop();
     }
   };
+  
 
   if (currentView === 'app') {
     return (

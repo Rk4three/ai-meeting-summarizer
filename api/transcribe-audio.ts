@@ -40,9 +40,9 @@ export default async function handler(req: Request): Promise<Response> {
 
     const audioBuffer = await audioFile.arrayBuffer();
 
-    const DEEPGRAM_API_KEY = Deno.env.get('DEEPGRAM_API_KEY');
+    const DEEPGRAM_API_KEY = process.env.DEEPGRAM_API_KEY;
     if (!DEEPGRAM_API_KEY) {
-      throw new Error('DEEPGRAM_API_KEY is not configured');
+        throw new Error('DEEPGRAM_API_KEY is not configured');
     }
 
     const deepgramResponse = await fetch('https://api.deepgram.com/v1/listen?model=nova-2&smart_format=true&punctuate=true&diarize=true&utterances=true&language=en&multichannel=false&numerals=true', {
