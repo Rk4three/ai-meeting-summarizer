@@ -1,6 +1,12 @@
+import OpenAI from 'openai';
+
 export const config = {
     runtime: 'edge',
 };
+
+const openai = new OpenAI({
+    apiKey: process.env.OPENAI_API_KEY,
+});
 
 export default async function handler(req: Request) {
     if (req.method === 'OPTIONS') {
@@ -17,11 +23,6 @@ export default async function handler(req: Request) {
 
         if (!text) {
             throw new Error('Text is required');
-        }
-
-        const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
-        if (!GEMINI_API_KEY) {
-            throw new Error('GEMINI_API_KEY is not configured');
         }
 
         const prompt = `Analyze this meeting transcript and provide a comprehensive summary in JSON format with the following structure:
@@ -55,102 +56,45 @@ ${text}
 
 Please respond with only the JSON object, no additional text.`;
 
-        // Define different API endpoints and models to try
-        const attempts = [
-            {
-                url: `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${GEMINI_API_KEY}`,
-                config: {
-                    contents: [{ parts: [{ text: prompt }] }],
-                    generationConfig: { temperature: 0.1, topK: 1, topP: 1, maxOutputTokens: 2048 }
-                }
-            },
-            {
-                url: `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-pro:generateContent?key=${GEMINI_API_KEY}`,
-                config: {
-                    contents: [{ parts: [{ text: prompt }] }],
-                    generationConfig: { temperature: 0.1, topK: 1, topP: 1, maxOutputTokens: 2048 }
-                }
-            },
-            {
-                url: `https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent?key=${GEMINI_API_KEY}`,
-                config: {
-                    contents: [{ parts: [{ text: prompt }] }],
-                    generationConfig: { temperature: 0.1, maxOutputTokens: 2048 }
-                }
-            },
-            {
-                url: `https://generativelanguage.googleapis.com/v1/models/gemini-1.5-flash-latest:generateContent?key=${GEMINI_API_KEY}`,
-                config: {
-                    contents: [{ parts: [{ text: prompt }] }],
-                    generationConfig: { temperature: 0.1, maxOutputTokens: 2048 }
-                }
-            }
-        ];
+        const response = await openai.chat.completions.create({
+            model: "gpt-3.5-turbo",
+            messages: [{ "role": "user", "content": prompt }],
+            temperature: 0.1,
+            max_tokens: 2048,
+        });
 
-        let lastError = null;
+        const generatedText = response.choices[0]?.message?.content;
 
-        // Try each configuration
-        for (const attempt of attempts) {
-            try {
-                console.log(`Trying: ${attempt.url.split('?')[0]}`);
-                
-                const response = await fetch(attempt.url, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(attempt.config),
-                });
+        if (!generatedText) {
+            throw new Error('No text generated in response');
+        }
 
-                if (response.ok) {
-                    const data = await response.json();
-                    const generatedText = data.candidates?.[0]?.content?.parts?.[0]?.text;
-                    
-                    if (!generatedText) {
-                        throw new Error('No text generated in response');
-                    }
-                    
-                    const cleanedText = generatedText.replace(/```json\n?|\n?```/g, '').trim();
-                    
-                    let result;
-                    try {
-                        result = JSON.parse(cleanedText);
-                    } catch (parseError) {
-                        console.error('JSON Parse Error:', parseError);
-                        console.error('Generated Text:', generatedText);
-                        // Try to extract JSON from the response
-                        const jsonMatch = cleanedText.match(/\{[\s\S]*\}/);
-                        if (jsonMatch) {
-                            result = JSON.parse(jsonMatch[0]);
-                        } else {
-                            throw parseError;
-                        }
-                    }
+        const cleanedText = generatedText.replace(/```json\n?|\n?```/g, '').trim();
 
-                    console.log('Successfully generated summary with model:', attempt.url.split('/models/')[1].split(':')[0]);
-                    return new Response(JSON.stringify(result), {
-                        headers: {
-                            'Content-Type': 'application/json',
-                            'Access-Control-Allow-Origin': '*',
-                        },
-                    });
-                } else {
-                    const errorData = await response.text();
-                    lastError = `${response.status} - ${errorData}`;
-                    console.error(`Failed attempt: ${lastError}`);
-                }
-            } catch (error) {
-                lastError = (error as Error).message;
-                console.error(`Error with attempt: ${lastError}`);
-                continue;
+        let result;
+        try {
+            result = JSON.parse(cleanedText);
+        } catch (parseError) {
+            console.error('JSON Parse Error:', parseError);
+            console.error('Generated Text:', generatedText);
+            const jsonMatch = cleanedText.match(/\{[\s\S]*\}/);
+            if (jsonMatch) {
+                result = JSON.parse(jsonMatch[0]);
+            } else {
+                throw parseError;
             }
         }
 
-        // If all attempts failed, throw the last error
-        throw new Error(`All Gemini API attempts failed. Last error: ${lastError}`);
+        return new Response(JSON.stringify(result), {
+            headers: {
+                'Content-Type': 'application/json',
+                'Access-Control-Allow-Origin': '*',
+            },
+        });
 
     } catch (error) {
         console.error('Analysis error:', error);
-        
-        // Return a basic fallback structure so the app doesn't completely break
+
         const fallbackResult = {
             overview: "Unable to generate AI summary due to API issues. Transcription was successful.",
             keyDecisions: [],
@@ -158,8 +102,7 @@ Please respond with only the JSON object, no additional text.`;
             keyTopics: ["Audio transcription completed"],
             nextSteps: ["Review transcription manually"]
         };
-        
-        // Return 200 with fallback data instead of 500 error
+
         return new Response(JSON.stringify(fallbackResult), {
             headers: {
                 'Content-Type': 'application/json',
