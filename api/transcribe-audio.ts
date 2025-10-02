@@ -41,7 +41,7 @@ export default async function handler(req: Request): Promise<Response> {
     const audioBuffer = await audioFile.arrayBuffer();
 
     const DEEPGRAM_API_KEY = process.env.DEEPGRAM_API_KEY;
-    const GROQ_API_KEY = process.env.GROQ_API_KEY;
+    const GROQ_API_KEY = process.env.GROQ_API_KEY; // Add this env var for Groq integration
     if (!DEEPGRAM_API_KEY) {
         throw new Error('DEEPGRAM_API_KEY is not configured');
     }
@@ -70,36 +70,40 @@ export default async function handler(req: Request): Promise<Response> {
     const speakerMap = new Map<number, string>();
 
     if (utterances.length > 0) {
-        // Preserve original speaker IDs from Deepgram for accurate diarization
+        // Remap speaker IDs to start from 1
         const uniqueSpeakers = [...new Set(utterances.map(u => u.speaker))].sort((a, b) => a - b);
         const speakerRemap = new Map<number, number>();
         uniqueSpeakers.forEach((id, index) => {
-            speakerRemap.set(id, id + 1); // Shift IDs to start from 1
+            speakerRemap.set(id, index + 1);
         });
 
-        // Try advanced speaker identification using Groq LLM
-        if (uniqueSpeakers.length > 1) {
+        // First, try advanced speaker identification using Groq LLM
+        if (uniqueSpeakers.length > 1) { // Only if multiple speakers
             const formattedUtterances = utterances
                 .map((u, idx) => `Utterance ${idx + 1} (Speaker ${u.speaker}, ${formatTimestamp(u.start)} - ${formatTimestamp(u.end)}): ${u.transcript}`)
                 .join('\n\n');
 
-            const groqPrompt = `You are an expert at identifying unique speakers in a diarized meeting transcript, where each utterance is labeled with a numeric speaker ID (e.g., Speaker 0, Speaker 1). Your task is to infer the real names of each speaker based on the entire conversation context, ensuring distinct speakers are correctly differentiated.
+            const groqPrompt = `You are an expert at identifying speakers in meeting transcripts. Analyze the following utterances from a diarized transcript, where each is labeled with a numeric speaker ID (e.g., Speaker 0, Speaker 1) based on voice differences.
 
-Analyze the transcript for:
+Infer the real names of each speaker based on the entire conversation context:
 - Self-introductions (e.g., "Hi, I'm Alice").
-- Direct addresses (e.g., if Speaker 0 says "Bob, what do you think?", the next speaker responding is likely Bob).
-- Responses addressing previous speakers (e.g., if Speaker 1 says "Yes, Alice", Speaker 0 is likely Alice).
-- Contextual clues (e.g., consistent roles, topics, or name mentions across utterances).
-- Sequential interactions (e.g., question-response patterns to link speakers).
+- Direct addresses: If a speaker says "Bob, what do you think?" the next responding utterance (if different speaker ID) is likely Bob.
+- Responses addressing previous: If a speaker says "Yes, Alice," the previous utterance's speaker is likely Alice.
+- Chain inferences: Propagate names backwards and forwards for consistency (e.g., if later response identifies earlier speaker).
+- References to names in context (e.g., consistent roles or mentions).
+
+Example inference:
+Transcript:
+Utterance 1 (Speaker 0): Alice, can you update us?
+Utterance 2 (Speaker 1): Sure, Bob.
+Then Speaker 0 is Bob (from response), Speaker 1 is Alice (from address).
 
 Rules:
 - Use only the provided transcript; do not assume external knowledge.
-- Assign proper individual names (e.g., Alice, Bob) only when there is strong evidence (e.g., direct mention, clear address-response pattern).
-- Do not use group terms like "Everyone", "Team", or roles unless explicitly a name.
-- Ensure each speaker ID maps to a unique name or label; avoid assigning the same name to multiple IDs.
-- If a name cannot be confidently inferred, use "Speaker [ID]" with the original ID (e.g., "Speaker 0").
+- Only assign proper individual names (e.g., Alice, Bob); do not use group terms like "Everyone", "Team", or roles unless explicitly a name.
+- Be conservative: only assign a name if there is strong evidence (e.g., direct mention or clear inference); otherwise, label as "Speaker [ID]" using the original ID.
+- Ensure names are unique; do not assign the same name to multiple speakers. If conflict, fallback to "Speaker [ID]" for ambiguous ones.
 - Output ONLY a valid JSON object mapping original speaker IDs (as strings) to names, like: {"0": "Alice", "1": "Bob", "2": "Speaker 2"}.
-- Verify that distinct speaker IDs correspond to distinct voices based on context and diarization.
 
 Transcript:
 ${formattedUtterances}
@@ -113,13 +117,13 @@ Speaker mapping:`;
                     'Content-Type': 'application/json',
                 },
                 body: JSON.stringify({
-                    model: 'llama-3.3-70b-versatile', // Switched to more powerful model for better speaker differentiation
+                    model: 'llama-3.3-70b-versatile', // Switched to larger 70B model for improved reasoning and accuracy on complex inferences
                     messages: [
-                        { role: 'system', content: 'You are a precise assistant for transcript analysis. Follow instructions exactly and prioritize unique speaker identification.' },
+                        { role: 'system', content: 'You are a precise assistant for transcript analysis. Follow instructions exactly.' },
                         { role: 'user', content: groqPrompt }
                     ],
-                    temperature: 0.05, // Lowered for higher precision
-                    max_tokens: 512,
+                    temperature: 0.1, // Low temperature for consistent, factual output
+                    max_tokens: 512, // Increased for more complex mappings
                 }),
             });
 
@@ -127,80 +131,67 @@ Speaker mapping:`;
                 const groqResult = await groqResponse.json();
                 const groqContent = groqResult.choices?.[0]?.message?.content || '';
                 try {
-                    // Extract JSON from response
+                    // Extract JSON from response (handle if it's wrapped in text)
                     const jsonMatch = groqContent.match(/\{.*\}/s);
                     if (jsonMatch) {
                         const parsedMap = JSON.parse(jsonMatch[0]);
+                        const nameCounts = new Map<string, number>();
                         Object.entries(parsedMap).forEach(([key, value]) => {
                             const speakerId = parseInt(key as string, 10);
-                            if (!isNaN(speakerId) && typeof value === 'string' && value.trim() !== '' && !/everyone|team|group/i.test(value)) {
-                                speakerMap.set(speakerId, value);
+                            const name = (value as string).trim();
+                            if (!isNaN(speakerId) && name !== '' && !name.toLowerCase().includes('everyone')) {
+                                nameCounts.set(name, (nameCounts.get(name) || 0) + 1);
                             }
                         });
+                        // Only apply if no duplicates
+                        if (Array.from(nameCounts.values()).every(count => count === 1)) {
+                            Object.entries(parsedMap).forEach(([key, value]) => {
+                                const speakerId = parseInt(key as string, 10);
+                                const name = (value as string).trim();
+                                if (!isNaN(speakerId) && name !== '') {
+                                    speakerMap.set(speakerId, name);
+                                }
+                            });
+                        }
+                        // Else fallback will handle
                     }
                 } catch (parseError) {
                     console.error('Failed to parse Groq response:', parseError);
+                    // Fall back to regex method if parsing fails
                 }
             } else {
-                console.error('Groq API error:', groqResponse.status, await groqResponse.text());
+                console.error('Groq API error:', groqResponse.status);
+                // Fall back to regex method
             }
         }
 
-        // Fallback to regex-based extraction for unmapped speakers
-        const extractSpeakerName = (text: string, previousUtterances: Utterance[], currentIndex: number): string | null => {
+        // Fallback to original regex-based extraction if Groq didn't assign all speakers or failed
+        const extractSpeakerName = (text: string): string | null => {
             const lowerText = text.toLowerCase();
             const commonWords = new Set(['there', 'good', 'nice', 'thank', 'thanks', 'yes', 'okay', 'well', 'the', 'a', 'is', 'in', 'it', 'of', 'for', 'on', 'with', 'at', 'by', 'from', 'as', 'everyone']);
             const namePatterns = [
-                /(?:my name is|i'm|i am|this is|call me)\s+([a-z]{2,15})/i,
-                /(?:hi|hello),?\s+([a-z]{2,15})/i,
-                /^([a-z]{2,15}),?\s+(?:here|speaking)/i,
-                /^(?:it's|it is)\s+([a-z]{2,15})/i,
-                /([a-z]{2,15})\s+is my name/i
+              /(?:my name is|i'm|i am|this is|call me)\s+([a-z]{2,15})/i,
+              /(?:hi|hello),?\s+([a-z]{2,15})/i,
+              /^([a-z]{2,15}),?\s+(?:here|speaking)/i,
+              /^(?:it's|it is)\s+([a-z]{2,15})/i,
+              /([a-z]{2,15})\s+is my name/i
             ];
-
-            // Check direct patterns
             for (const pattern of namePatterns) {
-                const match = text.match(pattern);
-                if (match && match[1]) {
-                    const name = match[1].charAt(0).toUpperCase() + match[1].slice(1).toLowerCase();
-                    if (!commonWords.has(name.toLowerCase())) {
-                        return name;
-                    }
-                }
-            }
-
-            // Check for addressed names in current or previous utterances
-            const addressPattern = /([a-z]{2,15}),\s*(?:can|please|what|do)/i;
-            const match = text.match(addressPattern);
-            if (match && match[1] && !commonWords.has(match[1].toLowerCase())) {
+              const match = text.match(pattern);
+              if (match && match[1]) {
                 const name = match[1].charAt(0).toUpperCase() + match[1].slice(1).toLowerCase();
-                // Assign to next speaker if available
-                if (currentIndex + 1 < utterances.length) {
-                    const nextSpeakerId = utterances[currentIndex + 1].speaker;
-                    if (!speakerMap.has(nextSpeakerId) && !Array.from(speakerMap.values()).includes(name)) {
-                        speakerMap.set(nextSpeakerId, name);
-                    }
+                if (!commonWords.has(name.toLowerCase())) {
+                  return name;
                 }
+              }
             }
-
-            // Check for responses addressing previous speaker
-            const responsePattern = /(?:yes|okay|sure),\s*([a-z]{2,15})/i;
-            const responseMatch = text.match(responsePattern);
-            if (responseMatch && responseMatch[1] && currentIndex > 0 && !commonWords.has(responseMatch[1].toLowerCase())) {
-                const name = responseMatch[1].charAt(0).toUpperCase() + responseMatch[1].slice(1).toLowerCase();
-                const prevSpeakerId = utterances[currentIndex - 1].speaker;
-                if (!speakerMap.has(prevSpeakerId) && !Array.from(speakerMap.values()).includes(name)) {
-                    speakerMap.set(prevSpeakerId, name);
-                }
-            }
-
             return null;
         };
 
         // Apply fallback for unmapped speakers
-        utterances.forEach((utterance, index) => {
+        utterances.forEach((utterance) => {
             if (!speakerMap.has(utterance.speaker)) {
-                const name = extractSpeakerName(utterance.transcript, utterances, index);
+                const name = extractSpeakerName(utterance.transcript);
                 if (name && utterance.confidence >= 0.95 && !Array.from(speakerMap.values()).includes(name)) {
                     speakerMap.set(utterance.speaker, name);
                 }
@@ -210,15 +201,14 @@ Speaker mapping:`;
         // Default to "Speaker X" (remapped to start from 1) if still unknown
         uniqueSpeakers.forEach(speakerId => {
             if (!speakerMap.has(speakerId)) {
-                const remappedId = speakerRemap.get(speakerId) || speakerId + 1;
+                const remappedId = speakerRemap.get(speakerId) || speakerId;
                 speakerMap.set(speakerId, `Speaker ${remappedId}`);
             }
         });
 
-        // Generate segments with mapped speakers
         segments = utterances.map((utterance, index) => ({
             id: `segment_${index}`,
-            speaker: speakerMap.get(utterance.speaker) || `Speaker ${speakerRemap.get(utterance.speaker) || utterance.speaker + 1}`,
+            speaker: speakerMap.get(utterance.speaker) || `Speaker ${speakerRemap.get(utterance.speaker) || utterance.speaker}`,
             text: utterance.transcript.trim(),
             timestamp: `${formatTimestamp(utterance.start)} - ${formatTimestamp(utterance.end)}`,
             confidence: utterance.confidence || 0.9,
