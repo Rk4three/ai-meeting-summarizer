@@ -49,7 +49,7 @@ export default async function handler(req: Request): Promise<Response> {
         throw new Error('GROQ_API_KEY is not configured');
     }
 
-    const deepgramResponse = await fetch('https://api.deepgram.com/v1/listen?model=nova-2-meeting&smart_format=true&punctuate=true&diarize=true&utterances=true&language=en&multichannel=false&numerals=true&paragraphs=true&utt_split=1.0', {
+    const deepgramResponse = await fetch('https://api.deepgram.com/v1/listen?model=nova-3&tier=enhanced&smart_format=true&punctuate=true&diarize=true&utterances=true&language=en&multichannel=false&numerals=true&paragraphs=true&utt_split=1.5', {
       method: 'POST',
       headers: {
         'Authorization': `Token ${DEEPGRAM_API_KEY}`,
@@ -82,8 +82,8 @@ export default async function handler(req: Request): Promise<Response> {
         const mergedUtterances: Utterance[] = [];
         let current: Utterance | null = null;
         utterances.forEach(u => {
-            if (current && current.speaker === u.speaker && current.transcript.endsWith(',') && u.transcript[0] === u.transcript[0].toLowerCase()) {
-                // Merge continuation
+            if (current && current.speaker === u.speaker && (current.transcript.endsWith(',') || current.transcript.endsWith('?')) && u.transcript[0] === u.transcript[0].toLowerCase()) {
+                // Merge continuation, including questions
                 current.transcript += ' ' + u.transcript;
                 current.end = u.end;
                 current.confidence = Math.min(current.confidence, u.confidence);
@@ -148,20 +148,19 @@ Analyze the conversation flow:
 
 Infer names:
 - From direct addresses and responses (e.g., if utterance ends with "Jason, can you...", the speaker is not Jason, but addressing Jason; the next response is Jason's).
+- For responses like "Yes, Tony.", the current speaker is responding to Tony, so the previous speaker is Tony, and the current is the addressee from the previous utterance.
+- Avoid assigning the addressed name to the addressing utterance.
 - For unnamed speakers, assign "Speaker 1", "Speaker 2", etc., based on order of appearance, starting from 1.
 
 Example:
 Transcript:
-Utterance 0 (Speaker 0): Hello everyone.
-Utterance 1 (Speaker 0): Jason,
-Utterance 2 (Speaker 0): can you take minutes?
-Utterance 3 (Speaker 0): Yes, Tony.
-Utterance 4 (Speaker 0): No problem.
-Utterance 5 (Speaker 0): Thanks. Carrie, update us?
-Utterance 6 (Speaker 0): Yes, Tony.
-Utterance 7 (Speaker 0): We decided...
-Utterance 8 (Speaker 0): Fantastic.
-Then assign: ["Tony", "Tony", "Tony", "Jason", "Jason", "Tony", "Carrie", "Carrie", "Tony"]  (Merge 1-2 as Tony addressing Jason; 3-4 Jason responding to Tony; 5 Tony; 6-7 Carrie; 8 Tony).
+Utterance 0 (Speaker 0): Hello, everyone. Tim and Melinda are running late, but we have a lot to get through, so we should get started.
+Utterance 1 (Speaker 0): Jason, can you please take the minutes today?
+Utterance 2 (Speaker 0): Yes. Of course, Tony. No problem.
+Utterance 3 (Speaker 0): Thanks. Okay. Let's get the ball rolling. First on the agenda today, Carrie, can you please give us an update on the marketing strategy for our new beverage, ginger cola?
+Utterance 4 (Speaker 0): Yes, Tony. Well, we have decided to pitch the new ginger cola as a health and energy drink.
+Utterance 5 (Speaker 0): Fantastic. I think this will be our next big hit.
+Then assign: ["Tony", "Tony", "Jason", "Tony", "Carrie", "Tony"]  (0-1: Tony speaking and addressing Jason; 2: Jason responding to Tony; 3: Tony thanking and addressing Carrie; 4: Carrie responding to Tony; 5: Tony concluding).
 
 Rules:
 - Use only the provided transcript.
