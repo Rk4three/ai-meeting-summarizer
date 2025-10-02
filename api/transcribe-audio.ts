@@ -124,24 +124,29 @@ Speaker mapping:`;
 Analyze the conversation flow:
 - Detect speaker changes based on addresses (e.g., "Bob," starts question to Bob, next is Bob's response).
 - Responses like "Yes, Alice" refer to previous speaker as Alice.
-- Chain inferences across utterances.
+- Questions or addresses typically indicate the end of one speaker and start of another.
+- Consecutive statements without response are likely same speaker.
+- Chain inferences: Propagate names backwards and forwards.
 - Group consecutive utterances by the same inferred speaker.
 
 Infer names:
 - From direct addresses and responses.
-- For unnamed speakers, assign "Speaker 1", "Speaker 2", etc., based on order of appearance.
+- For unnamed speakers, assign "Speaker 1", "Speaker 2", etc., based on order of appearance, starting from 1.
 
 Example:
 Transcript:
-Utterance 0 (Speaker 0): Alice, update us?
-Utterance 1 (Speaker 0): Sure, Bob.
-Then assign: Utterance 0 to "Bob", Utterance 1 to "Alice".
+Utterance 0 (Speaker 0): Hello team. Bob, can you update?
+Utterance 1 (Speaker 0): Yes, Alice.
+Utterance 2 (Speaker 0): The project is on track.
+Utterance 3 (Speaker 0): Thanks, Bob. Carrie, your turn.
+Utterance 4 (Speaker 0): Sure.
+Then assign: ["Alice", "Bob", "Bob", "Alice", "Carrie"]  (0: Alice addresses Bob, 1-2: Bob responds to Alice, 3: Alice thanks Bob and addresses Carrie, 4: Carrie responds).
 
 Rules:
 - Use only the provided transcript.
 - Only assign individual names; avoid "Everyone".
-- Ensure unique names.
-- Output ONLY a valid JSON array of speaker assignments for each utterance index (starting from 0), like: ["Tony", "Tony", "Jason", "Tony", "Carrie"] or ["Speaker 1", "Speaker 2"] if unnamed.
+- Ensure unique names for different speakers; same speaker can repeat.
+- Output ONLY a valid JSON array of speaker assignments for each utterance index (starting from 0), like: ["Tony", "Tony", "Jason", "Tony", "Carrie"] or ["Speaker 1", "Speaker 2", "Speaker 1"] if unnamed.
 
 Transcript:
 ${formattedUtterances}
@@ -162,7 +167,7 @@ Speaker assignments per utterance:`;
                         { role: 'user', content: groqPrompt }
                     ],
                     temperature: 0.1,
-                    max_tokens: 512,
+                    max_tokens: 1024, // Increased to handle longer transcripts
                 }),
             });
 
@@ -177,9 +182,8 @@ Speaker assignments per utterance:`;
                             const parsedMap = JSON.parse(jsonMatch[0]);
                             const nameCounts = new Map<string, number>();
                             Object.entries(parsedMap).forEach(([key, value]) => {
-                                const speakerId = parseInt(key as string, 10);
                                 const name = (value as string).trim();
-                                if (!isNaN(speakerId) && name !== '' && !name.toLowerCase().includes('everyone')) {
+                                if (name !== '' && !name.toLowerCase().includes('everyone')) {
                                     nameCounts.set(name, (nameCounts.get(name) || 0) + 1);
                                 }
                             });
@@ -196,18 +200,15 @@ Speaker assignments per utterance:`;
                             // Utterance index-based mapping for fallback
                             const parsedArray = JSON.parse(jsonMatch[0]) as string[];
                             if (parsedArray.length === utterances.length) {
-                                const nameCounts = new Map<string, number>();
-                                parsedArray.forEach((name, index) => {
-                                    name = name.trim();
-                                    if (name !== '' && !name.toLowerCase().includes('everyone')) {
-                                        nameCounts.set(name, (nameCounts.get(name) || 0) + 1);
-                                        utteranceSpeakerMap.set(index, name);
+                                const cleanedArray = parsedArray.map(name => name.trim()).filter(name => name !== '' && !name.toLowerCase().includes('everyone'));
+                                if (cleanedArray.length === parsedArray.length) { // all valid
+                                    const uniqueNames = new Set(cleanedArray);
+                                    if (uniqueNames.size > 1) { // multiple speakers detected
+                                        parsedArray.forEach((name, index) => {
+                                            utteranceSpeakerMap.set(index, name.trim());
+                                        });
                                     }
-                                });
-                                if (Array.from(nameCounts.values()).every(count => count === 1)) {
-                                    // Valid, use it
-                                } else {
-                                    utteranceSpeakerMap.clear(); // Discard if duplicates
+                                    // else discard if only one unique name
                                 }
                             }
                         }
