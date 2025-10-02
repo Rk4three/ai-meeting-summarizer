@@ -49,7 +49,7 @@ export default async function handler(req: Request): Promise<Response> {
         throw new Error('GROQ_API_KEY is not configured');
     }
 
-    const deepgramResponse = await fetch('https://api.deepgram.com/v1/listen?model=nova-3&tier=enhanced&smart_format=true&punctuate=true&diarize=true&utterances=true&language=en&multichannel=false&numerals=true&paragraphs=true&utt_split=1.5', {
+    const deepgramResponse = await fetch('https://api.deepgram.com/v1/listen?model=nova-2-meeting&smart_format=true&punctuate=true&diarize=true&utterances=true&language=en&multichannel=false&numerals=true&paragraphs=true&utt_split=1.5', {
       method: 'POST',
       headers: {
         'Authorization': `Token ${DEEPGRAM_API_KEY}`,
