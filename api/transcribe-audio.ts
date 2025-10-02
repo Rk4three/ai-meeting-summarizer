@@ -70,21 +70,34 @@ export default async function handler(req: Request): Promise<Response> {
     const speakerMap = new Map<number, string>();
 
     if (utterances.length > 0) {
+        // Remap speaker IDs to start from 1
+        const uniqueSpeakers = [...new Set(utterances.map(u => u.speaker))].sort((a, b) => a - b);
+        const speakerRemap = new Map<number, number>();
+        uniqueSpeakers.forEach((id, index) => {
+            speakerRemap.set(id, index + 1);
+        });
+
         // First, try advanced speaker identification using Groq LLM
-        const uniqueSpeakers = [...new Set(utterances.map(u => u.speaker))];
         if (uniqueSpeakers.length > 1) { // Only if multiple speakers
             const formattedUtterances = utterances
                 .map((u, idx) => `Utterance ${idx + 1} (Speaker ${u.speaker}, ${formatTimestamp(u.start)} - ${formatTimestamp(u.end)}): ${u.transcript}`)
                 .join('\n\n');
 
-            const groqPrompt = `You are an expert at identifying speakers in meeting transcripts. Analyze the following utterances, each labeled with a speaker ID (e.g., Speaker 0, Speaker 1). 
+            const groqPrompt = `You are an expert at identifying speakers in meeting transcripts. Analyze the following utterances from a diarized transcript, where each is labeled with a numeric speaker ID (e.g., Speaker 0, Speaker 1).
 
-Infer the real names of each speaker based on context, such as self-introductions (e.g., "Hi, I'm Alice"), references (e.g., "Thanks, Bob"), or consistent topics/roles. 
+Infer the real names of each speaker based on the entire conversation context:
+- Self-introductions (e.g., "Hi, I'm Alice").
+- Direct addresses (e.g., if Speaker 0 says "Bob, what do you think?", then the next speaker responding is likely Bob).
+- Responses addressing previous speakers (e.g., if Speaker 1 says "Yes, Alice", then Speaker 0 is likely Alice).
+- References to names in context (e.g., consistent roles or mentions).
+- Chain inferences across the transcript for consistency.
 
+Rules:
 - Use only the provided transcript; do not assume external knowledge.
-- If a speaker's name is unclear, label them as "Speaker [ID]" (e.g., "Speaker 1").
-- Output ONLY a valid JSON object mapping speaker IDs to names, like: {"0": "Alice", "1": "Bob", "2": "Speaker 2"}.
-- Be conservative: only assign a name if confidence is high (e.g., direct mention).
+- Only assign proper individual names (e.g., Alice, Bob); do not use group terms like "Everyone", "Team", or roles unless explicitly a name.
+- Be conservative: only assign a name if there is strong evidence (e.g., direct mention or clear inference); otherwise, label as "Speaker [ID]" using the original ID.
+- Ensure names are unique; do not assign the same name to multiple speakers.
+- Output ONLY a valid JSON object mapping original speaker IDs (as strings) to names, like: {"0": "Alice", "1": "Bob", "2": "Speaker 2"}.
 
 Transcript:
 ${formattedUtterances}
@@ -98,13 +111,13 @@ Speaker mapping:`;
                     'Content-Type': 'application/json',
                 },
                 body: JSON.stringify({
-                    model: 'llama-3.1-8b-instant', // Fast and free-tier friendly model;
+                    model: 'llama-3.1-8b-instant', // Updated to current production model: fast, reliable, large context
                     messages: [
-                        { role: 'system', content: 'You are a helpful assistant for transcript analysis.' },
+                        { role: 'system', content: 'You are a precise assistant for transcript analysis. Follow instructions exactly.' },
                         { role: 'user', content: groqPrompt }
                     ],
                     temperature: 0.1, // Low temperature for consistent, factual output
-                    max_tokens: 200,
+                    max_tokens: 512, // Increased for more complex mappings
                 }),
             });
 
@@ -118,7 +131,7 @@ Speaker mapping:`;
                         const parsedMap = JSON.parse(jsonMatch[0]);
                         Object.entries(parsedMap).forEach(([key, value]) => {
                             const speakerId = parseInt(key as string, 10);
-                            if (!isNaN(speakerId) && typeof value === 'string') {
+                            if (!isNaN(speakerId) && typeof value === 'string' && value.trim() !== '' && !value.toLowerCase().includes('everyone')) {
                                 speakerMap.set(speakerId, value);
                             }
                         });
@@ -136,7 +149,7 @@ Speaker mapping:`;
         // Fallback to original regex-based extraction if Groq didn't assign all speakers or failed
         const extractSpeakerName = (text: string): string | null => {
             const lowerText = text.toLowerCase();
-            const commonWords = new Set(['there', 'good', 'nice', 'thank', 'thanks', 'yes', 'okay', 'well', 'the', 'a', 'is', 'in', 'it', 'of', 'for', 'on', 'with', 'at', 'by', 'from', 'as']);
+            const commonWords = new Set(['there', 'good', 'nice', 'thank', 'thanks', 'yes', 'okay', 'well', 'the', 'a', 'is', 'in', 'it', 'of', 'for', 'on', 'with', 'at', 'by', 'from', 'as', 'everyone']);
             const namePatterns = [
               /(?:my name is|i'm|i am|this is|call me)\s+([a-z]{2,15})/i,
               /(?:hi|hello),?\s+([a-z]{2,15})/i,
@@ -166,16 +179,17 @@ Speaker mapping:`;
             }
         });
 
-        // Default to "Speaker X" if still unknown
+        // Default to "Speaker X" (remapped to start from 1) if still unknown
         uniqueSpeakers.forEach(speakerId => {
             if (!speakerMap.has(speakerId)) {
-                speakerMap.set(speakerId, `Speaker ${speakerId}`);
+                const remappedId = speakerRemap.get(speakerId) || speakerId;
+                speakerMap.set(speakerId, `Speaker ${remappedId}`);
             }
         });
 
         segments = utterances.map((utterance, index) => ({
             id: `segment_${index}`,
-            speaker: speakerMap.get(utterance.speaker) || `Speaker ${utterance.speaker}`,
+            speaker: speakerMap.get(utterance.speaker) || `Speaker ${speakerRemap.get(utterance.speaker) || utterance.speaker}`,
             text: utterance.transcript.trim(),
             timestamp: `${formatTimestamp(utterance.start)} - ${formatTimestamp(utterance.end)}`,
             confidence: utterance.confidence || 0.9,
