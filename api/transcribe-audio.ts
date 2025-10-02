@@ -49,7 +49,7 @@ export default async function handler(req: Request): Promise<Response> {
         throw new Error('GROQ_API_KEY is not configured');
     }
 
-    const deepgramResponse = await fetch('https://api.deepgram.com/v1/listen?model=nova-2-meeting&smart_format=true&punctuate=true&diarize=true&utterances=true&language=en&multichannel=false&numerals=true', {
+    const deepgramResponse = await fetch('https://api.deepgram.com/v1/listen?model=nova-2-meeting&smart_format=true&punctuate=true&diarize=true&utterances=true&language=en&multichannel=false&numerals=true&paragraphs=true&utt_split=1.0', {
       method: 'POST',
       headers: {
         'Authorization': `Token ${DEEPGRAM_API_KEY}`,
@@ -78,7 +78,23 @@ export default async function handler(req: Request): Promise<Response> {
             speakerRemap.set(id, index + 1);
         });
 
-        const formattedUtterances = utterances
+        // Post-process to merge continuation utterances
+        const mergedUtterances: Utterance[] = [];
+        let current: Utterance | null = null;
+        utterances.forEach(u => {
+            if (current && current.speaker === u.speaker && current.transcript.endsWith(',') && u.transcript[0] === u.transcript[0].toLowerCase()) {
+                // Merge continuation
+                current.transcript += ' ' + u.transcript;
+                current.end = u.end;
+                current.confidence = Math.min(current.confidence, u.confidence);
+            } else {
+                if (current) mergedUtterances.push(current);
+                current = { ...u };
+            }
+        });
+        if (current) mergedUtterances.push(current);
+
+        const formattedUtterances = mergedUtterances
             .map((u, idx) => `Utterance ${idx} (Speaker ${u.speaker}, ${formatTimestamp(u.start)} - ${formatTimestamp(u.end)}): ${u.transcript}`)
             .join('\n\n');
 
@@ -86,7 +102,7 @@ export default async function handler(req: Request): Promise<Response> {
         const hasPotentialMultipleSpeakers = /([A-Z][a-z]{2,15}),/.test(formattedUtterances);
 
         // First, try advanced speaker identification using Groq LLM
-        if (uniqueSpeakers.length > 1 || (uniqueSpeakers.length === 1 && hasPotentialMultipleSpeakers && utterances.length > 1)) {
+        if (uniqueSpeakers.length > 1 || (uniqueSpeakers.length === 1 && hasPotentialMultipleSpeakers && mergedUtterances.length > 1)) {
             let groqPrompt: string;
 
             if (uniqueSpeakers.length > 1) {
@@ -126,21 +142,26 @@ Analyze the conversation flow:
 - Responses like "Yes, Alice" refer to previous speaker as Alice.
 - Questions or addresses typically indicate the end of one speaker and start of another.
 - Consecutive statements without response are likely same speaker.
+- If an utterance is short (e.g., a name like "Jason,"), and the next starts with lowercase, it may be a split address; consider merging them as part of the same speaker's turn (the addresser, not the addressee).
 - Chain inferences: Propagate names backwards and forwards.
 - Group consecutive utterances by the same inferred speaker.
 
 Infer names:
-- From direct addresses and responses.
+- From direct addresses and responses (e.g., if utterance ends with "Jason, can you...", the speaker is not Jason, but addressing Jason; the next response is Jason's).
 - For unnamed speakers, assign "Speaker 1", "Speaker 2", etc., based on order of appearance, starting from 1.
 
 Example:
 Transcript:
-Utterance 0 (Speaker 0): Hello team. Bob, can you update?
-Utterance 1 (Speaker 0): Yes, Alice.
-Utterance 2 (Speaker 0): The project is on track.
-Utterance 3 (Speaker 0): Thanks, Bob. Carrie, your turn.
-Utterance 4 (Speaker 0): Sure.
-Then assign: ["Alice", "Bob", "Bob", "Alice", "Carrie"]  (0: Alice addresses Bob, 1-2: Bob responds to Alice, 3: Alice thanks Bob and addresses Carrie, 4: Carrie responds).
+Utterance 0 (Speaker 0): Hello everyone.
+Utterance 1 (Speaker 0): Jason,
+Utterance 2 (Speaker 0): can you take minutes?
+Utterance 3 (Speaker 0): Yes, Tony.
+Utterance 4 (Speaker 0): No problem.
+Utterance 5 (Speaker 0): Thanks. Carrie, update us?
+Utterance 6 (Speaker 0): Yes, Tony.
+Utterance 7 (Speaker 0): We decided...
+Utterance 8 (Speaker 0): Fantastic.
+Then assign: ["Tony", "Tony", "Tony", "Jason", "Jason", "Tony", "Carrie", "Carrie", "Tony"]  (Merge 1-2 as Tony addressing Jason; 3-4 Jason responding to Tony; 5 Tony; 6-7 Carrie; 8 Tony).
 
 Rules:
 - Use only the provided transcript.
@@ -199,7 +220,7 @@ Speaker assignments per utterance:`;
                         } else {
                             // Utterance index-based mapping for fallback
                             const parsedArray = JSON.parse(jsonMatch[0]) as string[];
-                            if (parsedArray.length === utterances.length) {
+                            if (parsedArray.length === mergedUtterances.length) {
                                 const cleanedArray = parsedArray.map(name => name.trim()).filter(name => name !== '' && !name.toLowerCase().includes('everyone'));
                                 if (cleanedArray.length === parsedArray.length) { // all valid
                                     const uniqueNames = new Set(cleanedArray);
@@ -244,7 +265,7 @@ Speaker assignments per utterance:`;
             return null;
         };
 
-        utterances.forEach((utterance, index) => {
+        mergedUtterances.forEach((utterance, index) => {
             if (!speakerMap.has(utterance.speaker) && !utteranceSpeakerMap.has(index)) {
                 const name = extractSpeakerName(utterance.transcript);
                 if (name && utterance.confidence >= 0.95 && !Array.from(speakerMap.values()).includes(name)) {
@@ -261,7 +282,7 @@ Speaker assignments per utterance:`;
             }
         });
 
-        segments = utterances.map((utterance, index) => ({
+        segments = mergedUtterances.map((utterance, index) => ({
             id: `segment_${index}`,
             speaker: utteranceSpeakerMap.get(index) || speakerMap.get(utterance.speaker) || `Speaker ${speakerRemap.get(utterance.speaker) || utterance.speaker}`,
             text: utterance.transcript.trim(),
