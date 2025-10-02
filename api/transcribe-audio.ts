@@ -41,7 +41,7 @@ export default async function handler(req: Request): Promise<Response> {
     const audioBuffer = await audioFile.arrayBuffer();
 
     const DEEPGRAM_API_KEY = process.env.DEEPGRAM_API_KEY;
-    const GROQ_API_KEY = process.env.GROQ_API_KEY;
+    const GROQ_API_KEY = process.env.GROQ_API_KEY; // Add this env var for Groq integration
     if (!DEEPGRAM_API_KEY) {
         throw new Error('DEEPGRAM_API_KEY is not configured');
     }
@@ -49,9 +49,7 @@ export default async function handler(req: Request): Promise<Response> {
         throw new Error('GROQ_API_KEY is not configured');
     }
 
-    // Call Deepgram for transcription and initial diarization
-    // Added numerals=true back for better number formatting.
-    const deepgramResponse = await fetch('https://api.deepgram.com/v1/listen?model=nova-2-meeting&smart_format=true&punctuate=true&diarize=true&utterances=true&language=en&numerals=true', {
+    const deepgramResponse = await fetch('https://api.deepgram.com/v1/listen?model=nova-2-meeting&smart_format=true&punctuate=true&diarize=true&utterances=true&language=en&multichannel=false&numerals=true', {
       method: 'POST',
       headers: {
         'Authorization': `Token ${DEEPGRAM_API_KEY}`,
@@ -68,149 +66,209 @@ export default async function handler(req: Request): Promise<Response> {
     const deepgramResult = await deepgramResponse.json();
     const utterances: Utterance[] = deepgramResult.results?.utterances || [];
 
-    if (utterances.length === 0) {
-        const fullText = deepgramResult.results?.channels?.[0]?.alternatives?.[0]?.transcript || '';
-        return new Response(JSON.stringify({ transcription: [], fullText: fullText }), {
-            headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' },
-        });
-    }
-
+    let segments: Segment[] = [];
     const speakerMap = new Map<number, string>();
-    const utteranceSpeakerMap = new Map<number, string>();
-    
-    const uniqueSpeakers = [...new Set(utterances.map(u => u.speaker))].sort((a, b) => a - b);
-    
-    const extractSpeakerNameFromIntro = (text: string): string | null => {
-        const lowerText = text.toLowerCase();
-        const patterns = [
-            /(?:my name is|i'm|i am|this is|call me)\s+([a-z]{3,15})/i,
-            /^(?:it's|it is)\s+([a-z]{3,15})/i,
-        ];
-        const commonWords = new Set(['good', 'nice', 'here', 'speaking', 'ready', 'sorry', 'fine']);
-        for (const pattern of patterns) {
-            const match = text.match(pattern);
-            if (match && match[1] && !commonWords.has(match[1])) {
-                return match[1].charAt(0).toUpperCase() + match[1].slice(1);
-            }
-        }
-        return null;
-    };
+    const utteranceSpeakerMap = new Map<number, string>(); // For fallback per-utterance mapping (index-based)
 
-    utterances.forEach(utterance => {
-        if (!speakerMap.has(utterance.speaker)) {
-            const name = extractSpeakerNameFromIntro(utterance.transcript);
-            if (name && utterance.confidence > 0.9 && !Array.from(speakerMap.values()).includes(name)) {
-                speakerMap.set(utterance.speaker, name);
-            }
-        }
-    });
+    if (utterances.length > 0) {
+        // Remap speaker IDs to start from 1
+        const uniqueSpeakers = [...new Set(utterances.map(u => u.speaker))].sort((a, b) => a - b);
+        const speakerRemap = new Map<number, number>();
+        uniqueSpeakers.forEach((id, index) => {
+            speakerRemap.set(id, index + 1);
+        });
 
-    const formattedUtterances = utterances
-        .map((u, idx) => `Utterance ${idx} (Speaker ${u.speaker}, ${formatTimestamp(u.start)}): ${u.transcript}`)
-        .join('\n');
+        const formattedUtterances = utterances
+            .map((u, idx) => `Utterance ${idx} (Speaker ${u.speaker}, ${formatTimestamp(u.start)} - ${formatTimestamp(u.end)}): ${u.transcript}`)
+            .join('\n\n');
 
-    if (uniqueSpeakers.length > 1) {
-        const knownSpeakersJson = JSON.stringify(Object.fromEntries(speakerMap));
-        const groqPrompt = `You are an expert at identifying speakers in meeting transcripts. Analyze the following transcript, where each utterance has a numeric speaker ID. Your task is to determine the real name for each speaker ID based on conversational context.
+        // Detect if likely multi-speaker content (e.g., contains name addresses like "Jason,")
+        const hasPotentialMultipleSpeakers = /([A-Z][a-z]{2,15}),/.test(formattedUtterances);
 
-I have already identified some speakers based on direct introductions: ${knownSpeakersJson}.
-Use this information and the full transcript to find the remaining speaker names.
+        // First, try advanced speaker identification using Groq LLM
+        if (uniqueSpeakers.length > 1 || (uniqueSpeakers.length === 1 && hasPotentialMultipleSpeakers && utterances.length > 1)) {
+            let groqPrompt: string;
 
-Clues to look for:
-- Direct addresses: "Carrie, can you give us an update?" implies the next speaker might be Carrie.
-- Responses: "Yes, Tony." implies the previous speaker was Tony.
+            if (uniqueSpeakers.length > 1) {
+                // Standard prompt for multi-speaker diarization
+                groqPrompt = `You are an expert at identifying speakers in meeting transcripts. Analyze the following utterances from a diarized transcript, where each is labeled with a numeric speaker ID (e.g., Speaker 0, Speaker 1) based on voice differences.
+
+Infer the real names of each speaker based on the entire conversation context:
+- Self-introductions (e.g., "Hi, I'm Alice").
+- Direct addresses: If a speaker says "Bob, what do you think?" the next responding utterance (if different speaker ID) is likely Bob.
+- Responses addressing previous: If a speaker says "Yes, Alice," the previous utterance's speaker is likely Alice.
+- Chain inferences: Propagate names backwards and forwards for consistency (e.g., if later response identifies earlier speaker).
+- References to names in context (e.g., consistent roles or mentions).
+
+Example inference:
+Transcript:
+Utterance 0 (Speaker 0): Alice, can you update us?
+Utterance 1 (Speaker 1): Sure, Bob.
+Then Speaker 0 is Bob (from response), Speaker 1 is Alice (from address).
 
 Rules:
-1. Only assign a name if there is strong evidence in the text.
-2. If a name cannot be determined for a speaker ID, use the format "Speaker [ID+1]" (e.g., "Speaker 1", "Speaker 2").
-3. Ensure names are unique. Do not assign the same name to multiple different speaker IDs.
-4. Output ONLY a valid JSON object mapping the original speaker IDs (as strings) to their identified names. Example: {"0": "Tony", "1": "Jason", "2": "Carrie"}
+- Use only the provided transcript; do not assume external knowledge.
+- Only assign proper individual names (e.g., Alice, Bob); do not use group terms like "Everyone", "Team", or roles unless explicitly a name.
+- Be conservative: only assign a name if there is strong evidence (e.g., direct mention or clear inference); otherwise, label as "Speaker [ID]" using the original ID.
+- Ensure names are unique; do not assign the same name to multiple speakers. If conflict, fallback to "Speaker [ID]" for ambiguous ones.
+- Output ONLY a valid JSON object mapping original speaker IDs (as strings) to names, like: {"0": "Alice", "1": "Bob", "2": "Speaker 2"}.
 
 Transcript:
 ${formattedUtterances}
-`;
-        
-        try {
-            const groqResult = await callGroqAPI(groqPrompt, GROQ_API_KEY, true);
-            // **FIX: Robust JSON parsing**
-            const jsonMatch = groqResult.match(/\{[\s\S]*\}/);
-            if (jsonMatch) {
-                const parsedMap = JSON.parse(jsonMatch[0]);
-                Object.entries(parsedMap).forEach(([key, value]) => {
-                    const speakerId = parseInt(key, 10);
-                    const name = (value as string).trim();
-                    if (!isNaN(speakerId) && name && !speakerMap.has(speakerId)) {
-                        speakerMap.set(speakerId, name);
-                    }
-                });
+
+Speaker mapping:`;
             } else {
-                console.error("Groq multi-speaker response did not contain a valid JSON object.", groqResult);
-            }
-        } catch (error) {
-            console.error('Groq API call or JSON parsing failed for multi-speaker:', error);
-        }
+                // Fallback prompt for potential diarization failure (all same ID, but content suggests multiple)
+                groqPrompt = `You are an expert at identifying speakers in meeting transcripts. The following utterances are from a transcript where diarization may have failed, labeling all as the same speaker ID. Based on content, infer speaker changes and names.
 
-    } 
-    else if (utterances.length > 1) {
-        const groqPrompt = `You are an expert at correcting failed diarization in transcripts. The following transcript incorrectly labels all utterances with the same speaker ID. Your task is to analyze the conversation flow and assign the correct speaker to EACH utterance.
+Analyze the conversation flow:
+- Detect speaker changes based on addresses (e.g., "Bob," starts question to Bob, next is Bob's response).
+- Responses like "Yes, Alice" refer to previous speaker as Alice.
+- Questions or addresses typically indicate the end of one speaker and start of another.
+- Consecutive statements without response are likely same speaker.
+- Chain inferences: Propagate names backwards and forwards.
+- Group consecutive utterances by the same inferred speaker.
 
-Analyze the conversation for:
-- Questions and answers that indicate a speaker change.
-- Direct addresses: "Jason, your thoughts?" means the next utterance is likely Jason.
-- Responses: "Thanks, Tony." means the previous utterance was likely from Tony.
+Infer names:
+- From direct addresses and responses.
+- For unnamed speakers, assign "Speaker 1", "Speaker 2", etc., based on order of appearance, starting from 1.
+
+Example:
+Transcript:
+Utterance 0 (Speaker 0): Hello team. Bob, can you update?
+Utterance 1 (Speaker 0): Yes, Alice.
+Utterance 2 (Speaker 0): The project is on track.
+Utterance 3 (Speaker 0): Thanks, Bob. Carrie, your turn.
+Utterance 4 (Speaker 0): Sure.
+Then assign: ["Alice", "Bob", "Bob", "Alice", "Carrie"]  (0: Alice addresses Bob, 1-2: Bob responds to Alice, 3: Alice thanks Bob and addresses Carrie, 4: Carrie responds).
 
 Rules:
-1. For each utterance, identify the speaker's name.
-2. If a speaker's name is not mentioned, assign a generic label like "Speaker 1", "Speaker 2", etc., based on their order of appearance.
-3. Output ONLY a valid JSON object containing a single key "assignments" which is an array of strings. Each string is the speaker name for the corresponding utterance.
-Example format: {"assignments": ["Tony", "Tony", "Jason", "Carrie", "Tony"]}
+- Use only the provided transcript.
+- Only assign individual names; avoid "Everyone".
+- Ensure unique names for different speakers; same speaker can repeat.
+- Output ONLY a valid JSON array of speaker assignments for each utterance index (starting from 0), like: ["Tony", "Tony", "Jason", "Tony", "Carrie"] or ["Speaker 1", "Speaker 2", "Speaker 1"] if unnamed.
 
 Transcript:
 ${formattedUtterances}
-`;
-        
-        try {
-            const groqResult = await callGroqAPI(groqPrompt, GROQ_API_KEY, true);
-            // **FIX: Robust JSON parsing**
-            const jsonMatch = groqResult.match(/\{[\s\S]*\}/);
-            if (jsonMatch) {
-                const parsedResult = JSON.parse(jsonMatch[0]);
-                const assignments = parsedResult.assignments as string[];
-                if (assignments && assignments.length === utterances.length) {
-                    const uniqueNames = new Set(assignments);
-                    if (uniqueNames.size > 1) {
-                        assignments.forEach((name, index) => {
-                            utteranceSpeakerMap.set(index, name.trim());
-                        });
+
+Speaker assignments per utterance:`;
+            }
+
+            const groqResponse = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+                method: 'POST',
+                headers: {
+                    'Authorization': `Bearer ${GROQ_API_KEY}`,
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                    model: 'llama-3.3-70b-versatile', // Larger model for better inference
+                    messages: [
+                        { role: 'system', content: 'You are a precise assistant for transcript analysis. Follow instructions exactly.' },
+                        { role: 'user', content: groqPrompt }
+                    ],
+                    temperature: 0.1,
+                    max_tokens: 1024, // Increased to handle longer transcripts
+                }),
+            });
+
+            if (groqResponse.ok) {
+                const groqResult = await groqResponse.json();
+                const groqContent = groqResult.choices?.[0]?.message?.content || '';
+                try {
+                    const jsonMatch = groqContent.match(uniqueSpeakers.length > 1 ? /\{.*\}/s : /\[.*\]/s);
+                    if (jsonMatch) {
+                        if (uniqueSpeakers.length > 1) {
+                            // ID-based mapping
+                            const parsedMap = JSON.parse(jsonMatch[0]);
+                            const nameCounts = new Map<string, number>();
+                            Object.entries(parsedMap).forEach(([key, value]) => {
+                                const name = (value as string).trim();
+                                if (name !== '' && !name.toLowerCase().includes('everyone')) {
+                                    nameCounts.set(name, (nameCounts.get(name) || 0) + 1);
+                                }
+                            });
+                            if (Array.from(nameCounts.values()).every(count => count === 1)) {
+                                Object.entries(parsedMap).forEach(([key, value]) => {
+                                    const speakerId = parseInt(key as string, 10);
+                                    const name = (value as string).trim();
+                                    if (!isNaN(speakerId) && name !== '') {
+                                        speakerMap.set(speakerId, name);
+                                    }
+                                });
+                            }
+                        } else {
+                            // Utterance index-based mapping for fallback
+                            const parsedArray = JSON.parse(jsonMatch[0]) as string[];
+                            if (parsedArray.length === utterances.length) {
+                                const cleanedArray = parsedArray.map(name => name.trim()).filter(name => name !== '' && !name.toLowerCase().includes('everyone'));
+                                if (cleanedArray.length === parsedArray.length) { // all valid
+                                    const uniqueNames = new Set(cleanedArray);
+                                    if (uniqueNames.size > 1) { // multiple speakers detected
+                                        parsedArray.forEach((name, index) => {
+                                            utteranceSpeakerMap.set(index, name.trim());
+                                        });
+                                    }
+                                    // else discard if only one unique name
+                                }
+                            }
+                        }
                     }
+                } catch (parseError) {
+                    console.error('Failed to parse Groq response:', parseError);
                 }
             } else {
-                console.error("Groq single-speaker response did not contain a valid JSON object.", groqResult);
+                console.error('Groq API error:', groqResponse.status);
             }
-        } catch (error) {
-            console.error('Groq API call or JSON parsing failed for single-speaker fallback:', error);
         }
+
+        // Fallback to regex if needed
+        const extractSpeakerName = (text: string): string | null => {
+            const lowerText = text.toLowerCase();
+            const commonWords = new Set(['there', 'good', 'nice', 'thank', 'thanks', 'yes', 'okay', 'well', 'the', 'a', 'is', 'in', 'it', 'of', 'for', 'on', 'with', 'at', 'by', 'from', 'as', 'everyone']);
+            const namePatterns = [
+              /(?:my name is|i'm|i am|this is|call me)\s+([a-z]{2,15})/i,
+              /(?:hi|hello),?\s+([a-z]{2,15})/i,
+              /^([a-z]{2,15}),?\s+(?:here|speaking)/i,
+              /^(?:it's|it is)\s+([a-z]{2,15})/i,
+              /([a-z]{2,15})\s+is my name/i
+            ];
+            for (const pattern of namePatterns) {
+              const match = text.match(pattern);
+              if (match && match[1]) {
+                const name = match[1].charAt(0).toUpperCase() + match[1].slice(1).toLowerCase();
+                if (!commonWords.has(name.toLowerCase())) {
+                  return name;
+                }
+              }
+            }
+            return null;
+        };
+
+        utterances.forEach((utterance, index) => {
+            if (!speakerMap.has(utterance.speaker) && !utteranceSpeakerMap.has(index)) {
+                const name = extractSpeakerName(utterance.transcript);
+                if (name && utterance.confidence >= 0.95 && !Array.from(speakerMap.values()).includes(name)) {
+                    speakerMap.set(utterance.speaker, name);
+                }
+            }
+        });
+
+        // Default to "Speaker X" if still unknown
+        uniqueSpeakers.forEach(speakerId => {
+            if (!speakerMap.has(speakerId)) {
+                const remappedId = speakerRemap.get(speakerId) || speakerId;
+                speakerMap.set(speakerId, `Speaker ${remappedId}`);
+            }
+        });
+
+        segments = utterances.map((utterance, index) => ({
+            id: `segment_${index}`,
+            speaker: utteranceSpeakerMap.get(index) || speakerMap.get(utterance.speaker) || `Speaker ${speakerRemap.get(utterance.speaker) || utterance.speaker}`,
+            text: utterance.transcript.trim(),
+            timestamp: `${formatTimestamp(utterance.start)} - ${formatTimestamp(utterance.end)}`,
+            confidence: utterance.confidence || 0.9,
+        }));
     }
-
-    const speakerRemap = new Map<number, number>();
-    uniqueSpeakers.forEach((id, index) => {
-        speakerRemap.set(id, index + 1);
-    });
-
-    uniqueSpeakers.forEach(speakerId => {
-        if (!speakerMap.has(speakerId)) {
-            const remappedId = speakerRemap.get(speakerId) || speakerId + 1;
-            speakerMap.set(speakerId, `Speaker ${remappedId}`);
-        }
-    });
-
-    const segments: Segment[] = utterances.map((utterance, index) => ({
-        id: `segment_${index}`,
-        speaker: utteranceSpeakerMap.get(index) || speakerMap.get(utterance.speaker)!,
-        text: utterance.transcript.trim(),
-        timestamp: `${formatTimestamp(utterance.start)} - ${formatTimestamp(utterance.end)}`,
-        confidence: utterance.confidence || 0.9,
-    }));
 
     const fullText = deepgramResult.results?.channels?.[0]?.alternatives?.[0]?.transcript || '';
 
@@ -224,7 +282,6 @@ ${formattedUtterances}
       }
     );
   } catch (error) {
-    console.error("Error in handler: ", error);
     return new Response(
       JSON.stringify({ error: (error as Error).message }),
       {
@@ -236,39 +293,6 @@ ${formattedUtterances}
       }
     );
   }
-}
-
-async function callGroqAPI(prompt: string, apiKey: string, useJsonMode: boolean): Promise<string> {
-    const body: any = {
-        model: 'llama3-70b-8192',
-        messages: [
-            { role: 'system', content: 'You are a helpful assistant that provides concise and accurate results in JSON format.' },
-            { role: 'user', content: prompt }
-        ],
-        temperature: 0.1,
-        max_tokens: 1024,
-    };
-
-    if (useJsonMode) {
-        body.response_format = { type: 'json_object' };
-    }
-
-    const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
-        method: 'POST',
-        headers: {
-            'Authorization': `Bearer ${apiKey}`,
-            'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(body),
-    });
-
-    if (!response.ok) {
-        const errorText = await response.text();
-        throw new Error(`Groq API error: ${response.status} - ${errorText}`);
-    }
-
-    const result = await response.json();
-    return result.choices?.[0]?.message?.content || '';
 }
 
 function formatTimestamp(seconds: number): string {
