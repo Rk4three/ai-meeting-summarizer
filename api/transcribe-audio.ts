@@ -1,7 +1,9 @@
+// This file configures the runtime environment for the Vercel function to 'edge'.
 export const config = {
   runtime: 'edge',
 };
 
+// Defines the structure for a single utterance from the Deepgram API.
 interface Utterance {
   speaker: number;
   transcript: string;
@@ -10,6 +12,7 @@ interface Utterance {
   confidence: number;
 }
 
+// Defines the structure for a transcription segment that will be used in the frontend.
 interface Segment {
   id: string;
   speaker: string;
@@ -18,9 +21,9 @@ interface Segment {
   confidence: number;
 }
 
-// Vercel's handler takes a Request and returns a Response
+// This is the main handler for the Vercel serverless function. It processes the audio transcription request.
 export default async function handler(req: Request): Promise<Response> {
-  // Handle CORS preflight requests
+  // Handle CORS preflight requests to allow cross-origin requests from the frontend.
   if (req.method === 'OPTIONS') {
     return new Response(null, {
       headers: {
@@ -31,15 +34,19 @@ export default async function handler(req: Request): Promise<Response> {
   }
 
   try {
+    // Get the form data from the request, which includes the audio file.
     const formData = await req.formData();
     const audioFile = formData.get('audio') as File;
 
+    // If there's no audio file, we can't proceed, so throw an error.
     if (!audioFile) {
       throw new Error('No audio file provided');
     }
 
+    // Convert the audio file to an ArrayBuffer to send to the Deepgram API.
     const audioBuffer = await audioFile.arrayBuffer();
 
+    // Retrieve API keys from environment variables.
     const DEEPGRAM_API_KEY = process.env.DEEPGRAM_API_KEY;
     const GROQ_API_KEY = process.env.GROQ_API_KEY;
     if (!DEEPGRAM_API_KEY) {
@@ -49,6 +56,7 @@ export default async function handler(req: Request): Promise<Response> {
         throw new Error('GROQ_API_KEY is not configured');
     }
 
+    // Call the Deepgram API to transcribe the audio. We're enabling features like smart formatting, punctuation, and speaker diarization.
     const deepgramResponse = await fetch('https://api.deepgram.com/v1/listen?model=nova-2-meeting&smart_format=true&punctuate=true&diarize=true&utterances=true&language=en&multichannel=false&numerals=true', {
       method: 'POST',
       headers: {
@@ -58,25 +66,28 @@ export default async function handler(req: Request): Promise<Response> {
       body: audioBuffer,
     });
 
+    // If the Deepgram API returns an error, we throw an error with the details.
     if (!deepgramResponse.ok) {
         const errorText = await deepgramResponse.text();
         throw new Error(`Deepgram API error: ${deepgramResponse.status} - ${errorText}`);
     }
 
+    // Parse the JSON response from the Deepgram API.
     const deepgramResult = await deepgramResponse.json();
     const utterances: Utterance[] = deepgramResult.results?.utterances || [];
 
     let segments: Segment[] = [];
 
+    // If there are utterances, we'll process them to identify speakers.
     if (utterances.length > 0) {
-        // Step 1: Normalize speaker IDs to start from 0
+        // Step 1: Normalize speaker IDs to start from 0 for easier processing.
         const uniqueSpeakers = [...new Set(utterances.map(u => u.speaker))].sort((a, b) => a - b);
         const speakerRemap = new Map<number, number>();
         uniqueSpeakers.forEach((id, index) => {
             speakerRemap.set(id, index);
         });
 
-        // Step 2: Format transcript for LLM analysis
+        // Step 2: Format the transcript for the LLM to analyze and identify speakers.
         const formattedTranscript = utterances
             .map((u, idx) => {
                 const remappedSpeakerId = speakerRemap.get(u.speaker);
@@ -86,12 +97,12 @@ export default async function handler(req: Request): Promise<Response> {
 
         console.log('Formatted transcript for LLM:\n', formattedTranscript);
 
-        // Step 3: Use LLM to identify speakers
+        // Step 3: Use an LLM to identify the names of the speakers from the transcript.
         const speakerNames = await identifySpeakersWithLLM(formattedTranscript, utterances.length, GROQ_API_KEY);
         
         console.log('LLM identified speakers:', speakerNames);
 
-        // Step 4: Create segments with identified speaker names
+        // Step 4: Create the final transcription segments with the identified speaker names.
         segments = utterances.map((utterance, index) => {
             const remappedSpeakerId = speakerRemap.get(utterance.speaker) || 0;
             const speakerName = speakerNames[index] || `Speaker ${remappedSpeakerId + 1}`;
@@ -106,8 +117,10 @@ export default async function handler(req: Request): Promise<Response> {
         });
     }
 
+    // Get the full transcript text.
     const fullText = deepgramResult.results?.channels?.[0]?.alternatives?.[0]?.transcript || '';
 
+    // Return the transcription segments and the full text in the response.
     return new Response(
       JSON.stringify({ transcription: segments, fullText: fullText }),
       {
@@ -118,6 +131,7 @@ export default async function handler(req: Request): Promise<Response> {
       }
     );
   } catch (error) {
+    // If an error occurs at any point, log it and return a 500 error response.
     console.error('Transcription error:', error);
     return new Response(
       JSON.stringify({ error: (error as Error).message }),
@@ -132,11 +146,13 @@ export default async function handler(req: Request): Promise<Response> {
   }
 }
 
+// This function uses the Groq API to identify speaker names from the transcript.
 async function identifySpeakersWithLLM(
   transcript: string, 
   utteranceCount: number,
   apiKey: string
 ): Promise<string[]> {
+  // This prompt provides clear instructions and examples to the LLM for accurate speaker identification.
   const prompt = `You are analyzing a meeting transcript to identify speakers. Each line shows an utterance index, speaker ID (based on voice), and what they said.
 
 CRITICAL RULES:
@@ -175,6 +191,7 @@ OUTPUT REQUIREMENTS:
 JSON array:`;
 
   try {
+    // Call the Groq API with the formatted prompt.
     const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
       method: 'POST',
       headers: {
@@ -182,7 +199,7 @@ JSON array:`;
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({
-        model: 'llama-3.3-70b-versatile',
+        model: 'llama-3.3-70b-versatile', // Using a powerful model for better accuracy.
         messages: [
           { 
             role: 'system', 
@@ -195,24 +212,26 @@ JSON array:`;
       }),
     });
 
+    // If the API call fails, log the error and return an empty array.
     if (!response.ok) {
       console.error('Groq API error:', response.status);
       return [];
     }
 
+    // Parse the response from the Groq API.
     const result = await response.json();
     const content = result.choices?.[0]?.message?.content || '';
     
     console.log('LLM raw response:', content);
 
-    // Extract JSON array from response
+    // Extract the JSON array from the response content.
     const jsonMatch = content.match(/\[[\s\S]*\]/);
     if (jsonMatch) {
       const parsed = JSON.parse(jsonMatch[0]) as string[];
       
-      // Validate response
+      // Validate that the response is a valid array with the correct number of elements.
       if (Array.isArray(parsed) && parsed.length === utteranceCount) {
-        // Clean up names
+        // Clean up the names (e.g., trim whitespace, capitalize).
         const cleaned = parsed.map(name => {
           const trimmed = name.trim();
           // Capitalize first letter if it's a proper name
@@ -235,6 +254,7 @@ JSON array:`;
   }
 }
 
+// A helper function to format seconds into a "minutes:seconds" timestamp.
 function formatTimestamp(seconds: number): string {
   const minutes = Math.floor(seconds / 60);
   const remainingSeconds = Math.floor(seconds % 60);

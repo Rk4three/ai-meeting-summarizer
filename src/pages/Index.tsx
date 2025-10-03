@@ -6,6 +6,7 @@ import TranscriptionPanel from "@/components/TranscriptionPanel";
 import SummaryPanel from "@/components/SummaryPanel";
 import { Sparkles, Mic, FileText } from 'lucide-react';
 
+// Define the structure for a single transcription segment.
 interface TranscriptionSegment {
   id: string;
   speaker: string;
@@ -14,6 +15,7 @@ interface TranscriptionSegment {
   confidence?: number;
 }
 
+// Define the structure for the meeting summary.
 interface MeetingSummary {
   overview: string;
   keyDecisions: string[];
@@ -28,22 +30,33 @@ interface MeetingSummary {
   nextSteps: string[];
 }
 
+// This is the main component for the page.
 const Index = () => {
+  // State to switch between the landing page and the main app view.
   const [currentView, setCurrentView] = useState<'landing' | 'app'>('landing');
+  // State to track if the microphone is currently recording.
   const [isRecording, setIsRecording] = useState(false);
+  // State to track if an audio file is being processed.
   const [isProcessing, setIsProcessing] = useState(false);
+  // State to store the transcription segments.
   const [transcription, setTranscription] = useState<TranscriptionSegment[]>([]);
+  // State to store the AI-generated meeting summary.
   const [summary, setSummary] = useState<MeetingSummary | null>(null);
+  // State to show a loading indicator while the summary is being generated.
   const [isLoadingSummary, setIsLoadingSummary] = useState(false);
+  // Hook to show toast notifications.
   const { toast } = useToast();
+  // Ref to hold the MediaRecorder instance for recording audio.
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
 
+  // This function handles both transcription and summary generation.
   const processAudio = async (formData: FormData) => {
     setIsProcessing(true);
     setTranscription([]);
     setSummary(null);
 
     try {
+      // First, call the transcription API.
       const transcribeResponse = await fetch('/api/transcribe-audio', {
         method: 'POST',
         body: formData,
@@ -59,6 +72,7 @@ const Index = () => {
       setIsProcessing(false);
       setIsLoadingSummary(true);
 
+      // Once transcription is complete, call the summary API.
       const summaryResponse = await fetch('/api/analyze-meeting', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -94,6 +108,7 @@ const Index = () => {
     }
   };
 
+  // This function is called when a user selects a file to upload.
   const handleFileSelect = async (file: File) => {
     setCurrentView('app');
     const formData = new FormData();
@@ -101,6 +116,7 @@ const Index = () => {
     await processAudio(formData);
   };
 
+  // This function starts the microphone recording.
   const handleStartRecording = async () => {
     setIsRecording(true);
     setCurrentView('app');
@@ -108,6 +124,7 @@ const Index = () => {
     setSummary(null);
     
     try {
+      // Get access to the user's microphone.
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       const mediaRecorder = new MediaRecorder(stream);
       mediaRecorderRef.current = mediaRecorder;
@@ -117,6 +134,7 @@ const Index = () => {
         audioChunks.push(event.data);
       };
 
+      // When the recording is stopped, process the audio.
       mediaRecorder.onstop = async () => {
         const audioBlob = new Blob(audioChunks, { type: 'audio/webm' });
         const formData = new FormData();
@@ -137,6 +155,7 @@ const Index = () => {
     }
   };
 
+  // This function stops the microphone recording.
   const handleStopRecording = () => {
     setIsRecording(false);
     if (mediaRecorderRef.current) {
@@ -144,10 +163,12 @@ const Index = () => {
     }
   };
   
-
+  // If the user is in the main app view, render the dashboard.
   if (currentView === 'app') {
     return (
+      // Main app layout
       <div className="min-h-screen bg-background">
+        {/* Header */}
         <header className="sticky top-0 z-50 backdrop-blur-xl bg-background/80 border-b border-border/50">
           <div className="container mx-auto px-4 py-4">
             <div className="flex items-center justify-between">
@@ -169,9 +190,10 @@ const Index = () => {
           </div>
         </header>
 
+        {/* Main content grid */}
         <main className="container mx-auto px-4 py-8">
           <div className="grid lg:grid-cols-3 md:grid-cols-1 gap-6 lg:gap-8 max-w-7xl mx-auto">
-            {/* File Upload & Controls */}
+            {/* File Upload & Controls Column */}
             <div className="space-y-6 animate-fade-in">
               <div className="glass-card rounded-2xl p-6 hover-lift">
                 <h2 className="text-xl font-bold mb-4 text-gradient">Upload & Record</h2>
@@ -182,7 +204,7 @@ const Index = () => {
               </div>
             </div>
 
-            {/* Transcription Panel */}
+            {/* Transcription Panel Column */}
             <div className="animate-fade-in">
               <div className="glass-card rounded-2xl p-6 h-full hover-lift">
                 <h2 className="text-xl font-bold mb-4 text-gradient">Live Transcription</h2>
@@ -195,7 +217,7 @@ const Index = () => {
               </div>
             </div>
 
-            {/* Summary Panel */}
+            {/* Summary Panel Column */}
             <div className="animate-fade-in">
               <div className="glass-card rounded-2xl p-6 h-full hover-lift">
                 <SummaryPanel
@@ -210,6 +232,7 @@ const Index = () => {
     );
   }
 
+  // If the user is on the landing page, render the marketing content.
   return (
     <div className="min-h-screen bg-background">
       {/* Hero Section */}
@@ -266,6 +289,7 @@ const Index = () => {
           </div>
 
           <div className="grid md:grid-cols-3 gap-8 lg:gap-12">
+            {/* Feature 1: Real-time Transcription */}
             <div className="glass-card rounded-2xl p-8 lg:p-10 text-center group hover:glow-shadow hover-lift animate-slide-up">
               <div className="relative mb-6">
                 <Mic className="h-16 w-16 text-primary mx-auto group-hover:scale-110 transition-transform duration-300" />
@@ -277,6 +301,7 @@ const Index = () => {
               </p>
             </div>
 
+            {/* Feature 2: AI-Powered Analysis */}
             <div className="glass-card rounded-2xl p-8 lg:p-10 text-center group hover:glow-shadow hover-lift animate-slide-up">
               <div className="relative mb-6">
                 <Sparkles className="h-16 w-16 text-primary mx-auto group-hover:scale-110 transition-transform duration-300" />
@@ -288,6 +313,7 @@ const Index = () => {
               </p>
             </div>
 
+            {/* Feature 3: Smart Summaries */}
             <div className="glass-card rounded-2xl p-8 lg:p-10 text-center group hover:glow-shadow hover-lift animate-slide-up">
               <div className="relative mb-6">
                 <FileText className="h-16 w-16 text-primary mx-auto group-hover:scale-110 transition-transform duration-300" />
